@@ -7,7 +7,7 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 # --- Configuration ---
 # Generate this in the X Developer Portal
-X_BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAABpQ7wEAAAAAIZVA4YBfe3ozDO7ha6ksH0b9wjQ%3DGxXHpkbIIvRBx7qXpVAv9YXbKg9BphGEjZyBzUYwzf456zzciu" 
+X_BEARER_TOKEN = "your bearer token" 
 
 # Initialize the VADER sentiment analyzer
 analyzer = SentimentIntensityAnalyzer()
