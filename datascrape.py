@@ -1,13 +1,13 @@
 import yfinance as yf
 import pandas as pd
-import tweepy
+from gnews import GNews
 import datetime
 import os
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 # --- Configuration ---
-# Generate this in the X Developer Portal
-X_BEARER_TOKEN = "your bearer token" 
+# Initialize the GNews client
+google_news = GNews(language='en', country='IN', max_results=20)
 
 # Initialize the VADER sentiment analyzer
 analyzer = SentimentIntensityAnalyzer()
@@ -19,50 +19,58 @@ def get_indian_gold_data(start_date, end_date):
     ticker = "GOLDBEES.NS"
     gold_data = yf.download(ticker, start=start_date, end=end_date)
     
+    if gold_data.empty:
+        return pd.DataFrame()
+    
+    # Flatten MultiIndex columns if necessary
+    if isinstance(gold_data.columns, pd.MultiIndex):
+        gold_data.columns = gold_data.columns.get_level_values(0)
+        
     gold_data.reset_index(inplace=True)
     gold_data['Date'] = gold_data['Date'].dt.date
     gold_data = gold_data[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
     
     return gold_data.set_index('Date')
 
-def get_daily_tweets(query, target_date, bearer_token):
+def get_daily_news(query, target_date):
     """
-    Fetches tweets for a specific day using the X API v2.
+    Fetches news articles for a specific day using GNews.
     """
-    client = tweepy.Client(bearer_token=bearer_token)
-    start_time = f"{target_date}T00:00:00Z"
-    end_time = f"{target_date}T23:59:59Z"
-    tweets_list = []
+    # Set the date range for the target day
+    # GNews expects start_date and end_date as (year, month, day)
+    next_day = target_date + datetime.timedelta(days=1)
+    
+    google_news.start_date = (target_date.year, target_date.month, target_date.day)
+    google_news.end_date = (next_day.year, next_day.month, next_day.day)
+    
+    news_list = []
     
     try:
-        response = client.search_recent_tweets(
-            query=query,
-            start_time=start_time,
-            end_time=end_time,
-            max_results=100, 
-            tweet_fields=['created_at', 'text']
-        )
-        if response.data:
-            for tweet in response.data:
-                tweets_list.append(tweet.text)
+        # Fetch news
+        results = google_news.get_news(query)
+        if results:
+            for item in results:
+                # We'll use the title and description for sentiment analysis
+                news_text = f"{item['title']}. {item.get('description', '')}"
+                news_list.append(news_text)
                 
-    except tweepy.TweepyException as e:
-        print(f"Error fetching tweets for {target_date}: {e}")
+    except Exception as e:
+        print(f"Error fetching news for {target_date}: {e}")
         
-    return tweets_list
+    return news_list
 
-def analyze_daily_sentiment(tweets_list):
+def analyze_daily_sentiment(text_list):
     """
-    Calculates the average compound sentiment score for a list of tweets.
+    Calculates the average compound sentiment score for a list of text strings.
     Returns a score between -1.0 (highly negative) and 1.0 (highly positive).
     """
-    if not tweets_list:
+    if not text_list:
         return None
         
     daily_scores = []
-    for tweet in tweets_list:
+    for text in text_list:
         # VADER polarity_scores returns a dictionary with pos, neu, neg, and compound scores
-        score = analyzer.polarity_scores(tweet)
+        score = analyzer.polarity_scores(text)
         daily_scores.append(score['compound'])
         
     # Return the average compound score for the day
@@ -76,7 +84,7 @@ def generate_daily_reports(start_str, end_str):
     end_date = datetime.datetime.strptime(end_str, "%Y-%m-%d").date()
 
     print(f"Fetching Gold data from {start_date} to {end_date}...")
-    gold_df = get_indian_gold_data(start_str, end_str)
+    gold_df = get_indian_gold_data(start_str, (end_date + datetime.timedelta(days=1)).strftime("%Y-%m-%d"))
     reports = []
 
     delta = datetime.timedelta(days=1)
@@ -90,26 +98,26 @@ def generate_daily_reports(start_str, end_str):
         if current_date in gold_df.index:
             row = gold_df.loc[current_date]
             daily_financials = {
-                "Open": round(row['Open'], 2),
-                "High": round(row['High'], 2),
-                "Low": round(row['Low'], 2),
-                "Close": round(row['Close'], 2),
-                "Volume": row['Volume']
+                "Open": round(float(row['Open']), 2),
+                "High": round(float(row['High']), 2),
+                "Low": round(float(row['Low']), 2),
+                "Close": round(float(row['Close']), 2),
+                "Volume": int(row['Volume'])
             }
         
-        # 2. Get Tweets
-        daily_tweets = get_daily_tweets("gold India -is:retweet", current_date, X_BEARER_TOKEN)
+        # 2. Get News
+        daily_news = get_daily_news("gold price India", current_date)
         
         # 3. Analyze Sentiment
-        avg_sentiment = analyze_daily_sentiment(daily_tweets)
+        avg_sentiment = analyze_daily_sentiment(daily_news)
         
         # 4. Compile Record
         report_record = {
             "Date": current_date,
             **daily_financials,
-            "Tweet_Count": len(daily_tweets),
+            "News_Count": len(daily_news),
             "Avg_Sentiment_Score": avg_sentiment,
-            "Tweets": " | ".join(daily_tweets) 
+            "News_Titles": " | ".join(daily_news) 
         }
         reports.append(report_record)
         current_date += delta
@@ -118,7 +126,7 @@ def generate_daily_reports(start_str, end_str):
     new_df = pd.DataFrame(reports)
     filename = "gold_dataset.csv"
     
-    if os.path.exists(filename):
+    if os.path.exists(filename) and os.path.getsize(filename) > 0:
         existing_df = pd.read_csv(filename)
         # Convert Date column to date objects for consistent comparison
         existing_df['Date'] = pd.to_datetime(existing_df['Date']).dt.date
@@ -135,4 +143,5 @@ def generate_daily_reports(start_str, end_str):
 
 # --- Execution ---
 if __name__ == "__main__":
+    # Example range for testing (already available in GNews)
     generate_daily_reports("2026-02-20", "2026-02-22")
